@@ -1,13 +1,19 @@
 import { ref, type Ref } from "vue";
-import { getBounds, vectorLength } from "../utils/geometry";
+import {
+  computeTriangleOptions,
+  extractUniquePoints,
+  footOfPerpendicular,
+  getBounds,
+  vectorLength,
+} from "../utils/geometry";
 import type { Point, Segment, TriangleOption } from "../utils/types";
 import {
   buildSegments,
-  drawLabelRotated,
+  drawDimensionPair,
   drawSegment,
   findPerpendicularPairs,
+  getDimensionConfig,
 } from "../utils/segment-utils";
-import { computeTriangleOptions, extractUniquePoints } from "../utils/triangle";
 
 export function useRoomViewer(canvas: Ref<HTMLCanvasElement | null>) {
   const ctx = ref<CanvasRenderingContext2D | null>(null);
@@ -15,11 +21,10 @@ export function useRoomViewer(canvas: Ref<HTMLCanvasElement | null>) {
   const segments = ref<Segment[]>([]);
   const allPairs = ref<[Segment, Segment][]>([]);
   const flipInPair = ref(false);
-
   const currentPairIndex = ref(0);
-
   const triangleOptions = ref<TriangleOption[]>([]);
   const currentTriangleOptionIndex = ref(0);
+  const currentShapeFile = ref("");
 
   const shapeFiles = [
     "src/data/simple.json",
@@ -27,61 +32,51 @@ export function useRoomViewer(canvas: Ref<HTMLCanvasElement | null>) {
     "src/data/t_shape.json",
   ];
 
-  const currentShapeFile = ref("");
-
   function pickRandomShapeFile() {
     return shapeFiles[Math.floor(Math.random() * shapeFiles.length)];
   }
 
-  function drawTshape(ctx: CanvasRenderingContext2D) {
-    segments.value.forEach((seg) => drawSegment(ctx, seg));
+  function drawTShape(ctx: CanvasRenderingContext2D) {
+    segments.value.forEach((seg) => drawSegment(ctx, seg, "#333"));
 
-    let largestH: Segment | null = null;
-    let maxH = 0;
-    let sumVertical = 0;
-    let vertMinX = Infinity,
-      vertMaxX = -Infinity,
-      vertMinY = Infinity,
-      vertMaxY = -Infinity;
+    let bottomSeg: Segment | null = null;
+    let bottomY = Infinity;
+    let topSeg: Segment | null = null;
+    let topY = -Infinity;
 
     for (const seg of segments.value) {
       const [p1, p2] = seg;
-      const dx = p2[0] - p1[0];
-      const dy = p2[1] - p1[1];
-      const length = Math.hypot(dx, dy);
-
-      if (Math.abs(dx) > Math.abs(dy)) {
-        if (length > maxH) {
-          maxH = length;
-          largestH = seg;
+      const dy = Math.abs(p2[1] - p1[1]);
+      if (dy < 5) {
+        const avgY = (p1[1] + p2[1]) / 2;
+        if (avgY < bottomY) {
+          bottomY = avgY;
+          bottomSeg = seg;
         }
-      } else {
-        sumVertical += length;
-        vertMinX = Math.min(vertMinX, p1[0], p2[0]);
-        vertMaxX = Math.max(vertMaxX, p1[0], p2[0]);
-        vertMinY = Math.min(vertMinY, p1[1], p2[1]);
-        vertMaxY = Math.max(vertMaxY, p1[1], p2[1]);
+        if (avgY > topY) {
+          topY = avgY;
+          topSeg = seg;
+        }
       }
     }
+    if (!bottomSeg) return;
 
-    const horizColor = flipInPair.value ? "red" : "blue";
-    const vertColor = flipInPair.value ? "blue" : "red";
-    const horizLabel = flipInPair.value ? "Length" : "Width";
-    const vertLabel = flipInPair.value ? "Width" : "Length";
-
-    if (largestH) {
-      drawSegment(ctx, largestH, horizColor, 6);
-      drawLabelRotated(ctx, largestH, horizLabel, horizColor);
-    }
-    if (sumVertical > 0 && vertMinY < vertMaxY) {
-      const centerX = (vertMinX + vertMaxX) / 2;
-      const dimensionSeg: Segment = [
-        [centerX, vertMinY],
-        [centerX, vertMaxY],
+    let refPoint: Point;
+    if (topSeg) {
+      refPoint = [
+        (topSeg[0][0] + topSeg[1][0]) / 2,
+        (topSeg[0][1] + topSeg[1][1]) / 2,
       ];
-      drawSegment(ctx, dimensionSeg, vertColor, 6);
-      drawLabelRotated(ctx, dimensionSeg, vertLabel, vertColor);
+    } else {
+      const { minX, maxX, maxY } = getBounds(segments.value);
+      refPoint = [(minX + maxX) / 2, maxY];
     }
+
+    const foot = footOfPerpendicular(bottomSeg, refPoint);
+    const perpSeg: Segment = [refPoint, foot];
+
+    const config = getDimensionConfig(flipInPair.value);
+    drawDimensionPair(ctx, bottomSeg, perpSeg, config);
   }
 
   function drawTriangle(ctx: CanvasRenderingContext2D) {
@@ -109,18 +104,15 @@ export function useRoomViewer(canvas: Ref<HTMLCanvasElement | null>) {
       triangleOptions.value[currentTriangleOptionIndex.value];
     if (!triangleOption) return;
 
-    const color1 = flipInPair.value ? "red" : "blue";
-    const label1 = flipInPair.value ? "Width" : "Length";
-    const color2 = flipInPair.value ? "blue" : "red";
-    const label2 = flipInPair.value ? "Length" : "Width";
-
     segments.value.forEach((seg) => drawSegment(ctx, seg));
 
-    drawSegment(ctx, triangleOption.baseSeg, color1, 6);
-    drawLabelRotated(ctx, triangleOption.baseSeg, label1, color1);
-
-    drawSegment(ctx, triangleOption.perpSeg, color2, 6);
-    drawLabelRotated(ctx, triangleOption.perpSeg, label2, color2);
+    const config = getDimensionConfig(flipInPair.value);
+    drawDimensionPair(
+      ctx,
+      triangleOption.baseSeg,
+      triangleOption.perpSeg,
+      config
+    );
   }
 
   function drawRoom(pair: [Segment, Segment] | null = null) {
@@ -139,18 +131,16 @@ export function useRoomViewer(canvas: Ref<HTMLCanvasElement | null>) {
     ctx.value.translate(-centerX, -centerY);
 
     if (currentShapeFile.value.includes("t_shape")) {
-      drawTshape(ctx.value);
+      drawTShape(ctx.value);
     } else if (currentShapeFile.value.includes("triangle")) {
       drawTriangle(ctx.value);
     } else {
       segments.value.forEach((seg) => drawSegment(ctx.value!, seg));
       if (pair) {
         const [s1, s2] = pair;
-        const [primary, secondary] = flipInPair.value ? [s2, s1] : [s1, s2];
-        drawSegment(ctx.value, primary, "red", 5);
-        drawSegment(ctx.value, secondary, "blue", 5);
-        drawLabelRotated(ctx.value, primary, "Length", "red");
-        drawLabelRotated(ctx.value, secondary, "Width", "blue");
+
+        const config = getDimensionConfig(flipInPair.value);
+        drawDimensionPair(ctx.value, s1, s2, config);
       }
     }
 

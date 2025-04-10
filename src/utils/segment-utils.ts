@@ -73,3 +73,30 @@ export function drawLabelRotated(
   ctx.fillText(text, -textWidth / 2, 0);
   ctx.restore();
 }
+
+export function getDimensionConfig(flip: boolean) {
+  return {
+    primaryColor: flip ? "red" : "blue",
+    primaryLabel: flip ? "Width" : "Length",
+    secondaryColor: flip ? "blue" : "red",
+    secondaryLabel: flip ? "Length" : "Width",
+    lineWidth: 6,
+  };
+}
+
+export function drawDimensionPair(
+  ctx: CanvasRenderingContext2D,
+  segPrimary: Segment,
+  segSecondary: Segment,
+  config: ReturnType<typeof getDimensionConfig>
+) {
+  drawSegment(ctx, segPrimary, config.primaryColor, config.lineWidth);
+  drawLabelRotated(ctx, segPrimary, config.primaryLabel, config.primaryColor);
+  drawSegment(ctx, segSecondary, config.secondaryColor, config.lineWidth);
+  drawLabelRotated(
+    ctx,
+    segSecondary,
+    config.secondaryLabel,
+    config.secondaryColor
+  );
+}
